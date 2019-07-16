@@ -25,11 +25,11 @@ class Pair:
         :param pop_col: The name of the attribute specifying a node's
             population. Required for the "population" indicator only.
         """
-        if not nx.algorithms.isomorphism.is_isomorphic(partition_a.graph,
-                                                       partition_b.graph):
-            raise IsomorphismError('The graphs of the partitions are not '
-                                   'isomorphic. Were the partitions '
-                                   'generated from the same Markov chain?')
+        #if not nx.algorithms.isomorphism.is_isomorphic(partition_a.graph,
+        #                                               partition_b.graph):
+        #    raise IsomorphismError('The graphs of the partitions are not '
+        #                           'isomorphic. Were the partitions '
+        #                           'generated from the same Markov chain?')
         if indicator == 'population' and not pop_col:
             raise EmbeddingError('Cannot generate population-based indicators '
                                  'without population data. Specify a '
@@ -53,11 +53,6 @@ class Pair:
         self.node_ordering = {
             node: idx
             for idx, node in enumerate(sorted(partition_a.graph.nodes))
-        }
-        # Similarly, we fix an arbitrary ordering for edges.
-        self.edge_ordering = {
-            edge: idx
-            for idx, edge in enumerate(sorted(partition_a.graph.edges))
         }
         # We also fix an ordering for districts. This is primarily
         # to resolve indexing issues—by convention, the districts in a
@@ -83,14 +78,14 @@ class Pair:
         n_nodes = len(partition.graph.nodes)
         indicator = np.zeros((n_districts, n_nodes))
         if self.indicator_type == 'node':
-            for district_idx, district_label in self.district_ordering.items():
+            for district_label, district_idx in self.district_ordering.items():
                 nodes_in_district = [
                     self.node_ordering[node]
                     for node in partition.parts[district_label]
                 ]
                 indicator[district_idx][nodes_in_district] = 1
         elif self.indicator_type == 'population':
-            for district_idx, district_label in self.district_ordering.items():
+            for district_label, district_idx in self.district_ordering.items():
                 for node_label in partition.parts[district_label]:
                     node = partition.graph.nodes[node_label]
                     try:
@@ -165,8 +160,8 @@ class Pair:
         """
         n_districts = len(self.partition_a)
         distances = np.zeros((n_districts, n_districts))
-        for a_idx, a_label in self.district_ordering.items():
-            for b_idx, b_label in self.district_ordering.items():
+        for a_label, a_idx in self.district_ordering.items():
+            for b_label, b_idx in self.district_ordering.items():
                 dist = self.district_distance(a_label, b_label)
                 distances[a_idx][b_idx] = dist
         return distances
