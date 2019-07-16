@@ -85,8 +85,7 @@ class Pair:
         elif self.embedding_type == 'population':
             for district_idx, district_label in self.district_ordering.items():
                 for node_label in partition.parts[district_label]:
-                    node_idx = self.node_ordering[node_label]
-                    node = partition.graph.nodes[node_idx]
+                    node = partition.graph.nodes[node_label]
                     try:
                         node_pop = node[self.pop_col]
                     except KeyError:
@@ -94,10 +93,11 @@ class Pair:
                                              f'embedding. Node {node_label} '
                                              f'has no "{self.pop_col}" '
                                              'attribute.')
+                    node_idx = self.node_ordering[node_label]
                     embedding[district_idx][node_idx] = node_pop
 
         # Norm so that rows sum to 1.
-        return embedding / np.sum(embedding, axis=1)
+        return embedding / np.sum(embedding, axis=1).reshape(-1, 1)
 
     def district_distance(self, a_index: int, b_index: int) -> np.float64:
         """Calculates the 1-Wasserstein distance between districts.
