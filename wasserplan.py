@@ -9,8 +9,12 @@ from gerrychain import Partition
 
 class Pair:
     """A pair of isomorphic districting plans to compare."""
-    def __init__(self, partition_a: Partition, partition_b: Partition,
-                 indicator: str = 'node', pop_col: str = None):
+
+    def __init__(self,
+                 partition_a: Partition,
+                 partition_b: Partition,
+                 indicator: str = 'node',
+                 pop_col: str = None):
         """
         :param partition_a: The first GerryChain partition to compare.
         :param partition_b: The second GerryChain partition to compare.
@@ -130,7 +134,9 @@ class Pair:
         objective = cp.Minimize(cp.sum(cp.abs(edge_weights)))
         conservation = (self._edge_incidence @ edge_weights) == diff
         prob = cp.Problem(objective, [conservation])
-        prob.solve(solver='ECOS') #, verbose=True)  # solver recommended by Zach for big graphs
+        prob.solve(
+            solver='ECOS'
+        )  #, verbose=True)  # solver recommended by Zach for big graphs
         return np.sum(np.abs(edge_weights.value))
 
     @property
