@@ -124,7 +124,8 @@ class Pair:
             # computed in the course of computing the plan distance.
             return self._pairwise_distances[a_idx][b_idx]
         if self._edge_incidence is None:
-            self._edge_incidence = incidence_matrix(self.partition_a.graph)
+            self._edge_incidence = incidence_matrix(self.partition_a.graph,
+                                                    oriented=True)
 
         n_edges = len(self.partition_a.graph.edges)
         edge_weights = cp.Variable(n_edges)
@@ -134,9 +135,7 @@ class Pair:
         objective = cp.Minimize(cp.sum(cp.abs(edge_weights)))
         conservation = (self._edge_incidence @ edge_weights) == diff
         prob = cp.Problem(objective, [conservation])
-        prob.solve(
-            solver='ECOS'
-        )  #, verbose=True)  # solver recommended by Zach for big graphs
+        prob.solve(solver='ECOS')  # solver recommended by Zach for big graphs
         return np.sum(np.abs(edge_weights.value))
 
     @property
@@ -147,7 +146,7 @@ class Pair:
         if self._assignment is None:
             dist = self._pairwise_distances
             # pylint: disable=invalid-unary-operand-type
-            a_indices, b_indices = linear_sum_assignment(-dist)
+            a_indices, b_indices = linear_sum_assignment(dist)
             self._assignment = {
                 a_index: b_index
                 for a_index, b_index in zip(a_indices, b_indices)
