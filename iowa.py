@@ -180,3 +180,22 @@ for i in range(200):
 plt.scatter(X,Y)
 
 np.save("flip_run1.npy",distances)
+
+import sklearn
+X_embedded=sklearn.manifold.TSNE(n_components=2).fit_transform(distances)
+
+X2=[]
+Y2=[]
+for i in range(200):
+    X2.append(X_embedded[i][0])
+    Y2.append(X_embedded[i][1])
+   
+plt.scatter(X2,Y2)
+
+import sklearn
+smacof=sklearn.manifold.mds.smacof(distances, metric=True, n_components=2, init=None, n_init=8, n_jobs=None, max_iter=300, verbose=0, eps=0.001, random_state=None, return_n_iter=False)
+
+x=[t[0] for t in smacof[0]]
+y=[t[1] for t in smacof[0]]
+
+plt.scatter(x,y)
