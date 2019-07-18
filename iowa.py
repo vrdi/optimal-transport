@@ -63,7 +63,14 @@ def polsby_popper(partition):
     
     return (4*np.pi*partition["Area"])/np.square(partition["Perimeter"])
 
-def MC_sample(jgraph, num_dist):
+def MC_sample(jgraph, num_dist, num_steps, interval):
+    """
+    :param jgraph: gerrychain Graph object
+    :param num_dist: number of districts in the plan
+    :param num_steps: number of MC steps
+    :param interval: keep partitions obtained every interval step in the MC
+    :returns: a list of partitions sapmpled every interval step
+    """
     my_updaters = {
         "cut_edges": cut_edges,
         "population": updaters.Tally("TOTPOP", alias = "population"),
@@ -117,12 +124,12 @@ def MC_sample(jgraph, num_dist):
         constraints=[single_flip_contiguous],
         accept=always_accept,
         initial_state=initial_partition,
-        total_steps=20000
+        total_steps=num_steps
     )
 
     partitions=[] # recording partitions at each step
     for index, part in enumerate(chain):
-        if index % 100 == 0:
+        if index % interval == 0:
             partitions += [part]
 
     return(partitions)
