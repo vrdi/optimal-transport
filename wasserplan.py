@@ -200,7 +200,6 @@ class Chain:
                                          self.district_ordering)
             diff = left_indicator != right_indicator
             districts_changed = np.where(diff.any(axis=1))[0].tolist()
-            print(districts_changed)
             distances = np.zeros((2, 2))
             for outer_idx, outer_district in enumerate(districts_changed):
                 for inner_idx, inner_district in enumerate(districts_changed):
