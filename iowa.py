@@ -118,8 +118,7 @@ def MC_sample(jgraph, settings, save_part = True):
     constraints_=[pop_constraint, compactness_bound]
     
     if MC_type == "flip":
-        proposal = partial(
-        propose_random_flip, pop_col=pop_col, pop_target=ideal_population, epsilon=pop_tol, node_repeats=1)
+        proposal = propose_random_flip
         constraints_=[single_flip_contiguous, pop_constraint, compactness_bound]
         
     chain = MarkovChain(
