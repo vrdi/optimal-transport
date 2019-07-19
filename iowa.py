@@ -29,7 +29,7 @@ from gerrychain.accept import always_accept
 from wasserplan import Pair
 
 from sklearn.manifold import MDS
-
+import save_data as sd
 
 
 unique_label = "GEOID10"
@@ -63,12 +63,11 @@ def polsby_popper(partition):
     
     return (4*np.pi*partition["Area"])/np.square(partition["Perimeter"])
 
-def MC_sample(jgraph, num_dist, num_steps, interval):
+def MC_sample(jgraph, settings, save_part = True):
     """
     :param jgraph: gerrychain Graph object
-    :param num_dist: number of districts in the plan
-    :param num_steps: number of MC steps
-    :param interval: keep partitions obtained every interval step in the MC
+    :param settings: settings dictionary (possibly loaded from a yaml file) with election info, MC parameters, and constraints params (see settings.yaml file for an example of the structure needed)
+    :param save_part: True is you want to save the partition as json 
     :returns: a list of partitions sapmpled every interval step
     """
     my_updaters = {
@@ -82,20 +81,14 @@ def MC_sample(jgraph, num_dist, num_steps, interval):
         "Area": updaters.Tally("area", alias = "Area")
     }
 
-    num_elections = 3
-
-    election_names = [
-        "PRES00",
-        "PRES04",
-        "PRES08",
-    ]
-
-    election_columns = [
-        ["PRES00D", "PRES00R"],
-        ["PRES04D", "PRES04R"],
-        ["PRES08D", "PRES08R"]
-    ]
-
+    num_elections = settings['num_elections']
+    election_names = settings['election_names']
+    election_columns = settings['election_columns']
+    num_steps = settings['num_steps']
+    interval = settings['interval']
+    pop_tol = settings['pop_tol']
+    MC_type = settings['MC_type']
+    
     elections = [
         Election(
             election_names[i],
@@ -108,20 +101,30 @@ def MC_sample(jgraph, num_dist, num_steps, interval):
 
     my_updaters.update(election_updaters)
 
-
     initial_partition = Partition(jgraph, "CD", my_updaters) # by typing in "CD," we are saying to put every county into the congressional district that they belong to
-
-    ideal_population = ideal_population = sum(initial_partition["population"].values()) / len(
+    print('computed initial partition')
+    ideal_population =  sum(initial_partition["population"].values()) / len(
         initial_partition
     )
+    pop_constraint = constraints.within_percent_of_ideal_population(initial_partition, pop_tol)
 
     compactness_bound = constraints.UpperBound(
         lambda p: len(p["cut_edges"]), 2 * len(initial_partition["cut_edges"])
     )
-
+    
+    proposal = partial(
+        recom, pop_col=pop_col, pop_target=ideal_population, epsilon=pop_tol, node_repeats=1)
+    
+    constraints_=[pop_constraint, compactness_bound]
+    
+    if MC_type == "flip":
+        proposal = partial(
+        propose_random_flip, pop_col=pop_col, pop_target=ideal_population, epsilon=pop_tol, node_repeats=1)
+        constraints_=[single_flip_contiguous, pop_constraint, compactness_bound]
+        
     chain = MarkovChain(
-        proposal=propose_random_flip,
-        constraints=[single_flip_contiguous],
+        proposal=proposal,
+        constraints=constraints_,
         accept=always_accept,
         initial_state=initial_partition,
         total_steps=num_steps
@@ -130,8 +133,11 @@ def MC_sample(jgraph, num_dist, num_steps, interval):
     partitions=[] # recording partitions at each step
     for index, part in enumerate(chain):
         if index % interval == 0:
+            print('Markov chain step '+str(index))
             partitions += [part]
-
+    if save_part:
+        sd.dump_run(settings['partitions_path'], partitions) 
+        print('saved partitions to '+ settings['partitions_path'])
     return(partitions)
 
 
@@ -149,4 +155,30 @@ def build_distances_matrix(partitions):
             distances[j][i] = distances[i][j]
     return(distances)
 
-        
+def updaters_MC(settings):
+    my_updaters = {
+        "cut_edges": cut_edges,
+        "population": updaters.Tally("TOTPOP", alias = "population"),
+        "avg_pop_dist": avg_pop_dist,
+        "pop_dist_pct" : pop_dist_pct,
+        "area_land": updaters.Tally("ALAND10", alias = "area_land"),
+        "area_water": updaters.Tally("AWATER10", alias = "area_water"),
+        "Perimeter": updaters.Tally("perimeter", alias = "Perimeter"),
+        "Area": updaters.Tally("area", alias = "Area")}
+    num_elections = settings['num_elections']
+    election_names = settings['election_names']
+    election_columns = settings['election_columns']
+    num_steps = settings['num_steps']
+    interval = settings['interval']
+    pop_tol = settings['pop_tol']
+    
+    elections = [
+        Election(
+            election_names[i],
+            {"Democratic": election_columns[i][0], "Republican": election_columns[i][1]},
+        ) for i in range(num_elections)]
+
+    election_updaters = {election.name: election for election in elections}
+
+    my_updaters.update(election_updaters)
+    return(my_updaters)
