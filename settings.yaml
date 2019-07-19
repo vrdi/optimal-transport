@@ -3,15 +3,15 @@
 
 data_path_shp:  "../IA_counties/IA_counties.shp"
 # Location / file name to save partitions as json
-partitions_path : './Data/recom_iowa_25000_100.json'
+partitions_path : './Data/recom_run2_20000_steps.json'
 #Election data
-num_elections : 3
+num_elections : 5
 
-election_names : ["PRES00","PRES04","PRES08"]
-election_columns : [["PRES00D", "PRES00R"],["PRES04D", "PRES04R"],["PRES08D", "PRES08R"]]
+election_names : ["PRES00","PRES04","PRES08", "PRES12"]
+election_columns : [["PRES00D", "PRES00R"],["PRES04D", "PRES04R"],["PRES08D", "PRES08R"],["PRES12D", "PRES12R"] ]
 
 #number of districts
-num_dist: 4
+num_dist: 5
 
 # CHAIN
 num_steps : 25000
