@@ -1,15 +1,25 @@
 """Wasserstein distances between districting plans."""
-import numpy as np
-import cvxpy as cp
+from typing import Union, Dict, Hashable, Tuple
 import networkx as nx
-from typing import List, Dict
-from gerrychain import Partition
-from scipy.optimize import linear_sum_assignment
+import cvxpy as cp
+import numpy as np
+from numpy import linalg as LA
 from networkx.linalg.graphmatrix import incidence_matrix
+from scipy.optimize import linear_sum_assignment
+from gerrychain import Partition
 
 
-class Pair:
-    """A pair of isomorphic districting plans to compare."""
+class GenericPair:
+    """A pair of districting plans to compare with a lifted distance metric.
+
+    Subclasses are expected to implement :meth:`district_distance` and
+    :meth:`indicator`. :meth:`district_distance` should calculate the distance
+    between a district in partition A and a district in partition B; these
+    district-level distances are lifted to a plan-level distance via
+    minimum-cost matching. :meth:`indicator` should generate an indicator
+    matrix for a plan that embeds each district as a vector sized according
+    to the number of nodes in the graph that underlies the partitions.
+    """
 
     def __init__(self,
                  partition_a: Partition,
@@ -26,12 +36,11 @@ class Pair:
         :param pop_col: The name of the attribute specifying a node's
             population. Required for the "population" indicator only.
         """
-        # TODO: (efficiently) verify isomorphism?
         if indicator == 'population' and not pop_col:
             raise EmbeddingError('Cannot generate population-based indicators '
                                  'without population data. Specify a '
                                  'population column.')
-        if indicator not in ('population', 'node'):
+        elif indicator not in ('population', 'node'):
             raise EmbeddingError(f'Unknown indicator type "{indicator}"!')
 
         self.indicator_type = indicator
@@ -46,7 +55,7 @@ class Pair:
         # 0..len(graph.nodes) - 1. We sort the nodes first in the hope that
         # doing so will result in a more easily interpretable ordering.
         # (For instance, on a 2x2 grid graph, we might expect the node
-        #  with NetworkX label (0, 0) to map to 0 and (1, 1) to map to 3.)
+        #  with NetworkX label (0, 0) to map to 0 and (1, 1) to map to 4.)
         self.node_ordering = {
             node: idx
             for idx, node in enumerate(sorted(partition_a.graph.nodes))
@@ -60,39 +69,35 @@ class Pair:
             for idx, district in enumerate(sorted(partition_a.parts.keys()))
         }
 
-        self._a_indicators = indicators(partition_a, indicator, pop_col,
-                                        self.node_ordering,
-                                        self.district_ordering)
-        self._b_indicators = indicators(partition_b, indicator, pop_col,
-                                        self.node_ordering,
-                                        self.district_ordering)
+        self._a_indicators = self.indicators(partition_a)
+        self._b_indicators = self.indicators(partition_b)
         self._pairwise_distances = None  # lazy-loaded
         self._edge_incidence = None  # lazy-loaded
         self._assignment = None  # lazy-loaded
 
+    def indicators(self, partition: Partition) -> np.ndarray:
+        """Generates indicator vectors for all districts in a partition."
+
+        :param partition: The partition to generate indicator vectors for.
+        """
+        raise NotImplementedError('Indicator vectors not imlpemented. '
+                                  'Do not use the base class to calculate '
+                                  'distances.')
+
     def district_distance(self, a_label, b_label) -> np.float64:
-        """Calculates the 1-Wasserstein distance between districts.
+        """Calculates the distance between districts.
 
         Districts are compared across plans only, as districts within
         a plan are disjoint by definition.
 
-        :param a_index: The label of the district to compare in the
+        :param a_label: The label of the district to compare in the
            first district (``partition_a``).
-        :param b_index: The label of the district to compare in the
+        :param b_label: The label of the district to compare in the
            second district (``partition_b``).
         """
-        a_idx = self.district_ordering[a_label]
-        b_idx = self.district_ordering[b_label]
-        if self._pairwise_distances:
-            # Avoid recomputation if district distances have already been
-            # computed in the course of computing the plan distance.
-            return self._pairwise_distances[a_idx][b_idx]
-        if self._edge_incidence is None:
-            self._edge_incidence = incidence_matrix(self.partition_a.graph,
-                                                    oriented=True)
-        return district_distance(self._a_indicators[a_idx],
-                                 self._b_indicators[b_idx],
-                                 self._edge_incidence)
+        raise NotImplementedError('District-level distance not implemented. '
+                                  'Do not use the base class to calculate '
+                                  'distances.')
 
     @property
     def distance(self) -> np.float64:
@@ -128,16 +133,78 @@ class Pair:
         return distances
 
 
-class Chain:
-    """A wrapper for statistics over a sequence of districting plans."""
+class Pair(GenericPair):
+    """A pair of districting plans to compare (balanced 1-Wasserstein)."""
+    # The `Pair` class does not take any parameters beyond those
+    # taken by `GenericPair`; no custom constructor is necessary.
 
+    def indicators(self, partition: Partition) -> np.ndarray:
+        """Returns normed indicator vectors for all districts in a partition.
+
+        :param partition: The partition to generate indicator vectors for.
+        """
+        indicator = None
+        if self.indicator_type == 'node':
+            indicator = node_indicator(partition,
+                                       self.district_ordering,
+                                       self.node_ordering)
+        elif self.indicator_type == 'population':
+            indicator = population_indicator(partition,
+                                             self.district_ordering,
+                                             self.node_ordering,
+                                             self.pop_col)
+
+        # Norm so that rows sum to 1.
+        return indicator / np.sum(indicator, axis=1).reshape(-1, 1)
+
+    def district_distance(self, a_label, b_label) -> np.float64:
+        """Calculates the balanced 1-Wasserstein distance between districts.
+
+        Districts are compared across plans only, as districts within
+        a plan are disjoint by definition.
+
+        :param a_label: The label of the district to compare in the
+           first district (``partition_a``).
+        :param b_label: The label of the district to compare in the
+           second district (``partition_b``).
+        """
+        a_idx = self.district_ordering[a_label]
+        b_idx = self.district_ordering[b_label]
+        if self._pairwise_distances:
+            # Avoid recomputation if district distances have already been
+            # computed in the course of computing the plan distance.
+            return self._pairwise_distances[a_idx][b_idx]
+        if self._edge_incidence is None:
+            self._edge_incidence = incidence_matrix(self.partition_a.graph,
+                                                    oriented=True)
+        n_edges = self._edge_incidence.shape[1]
+        edge_weights = cp.Variable(n_edges)
+        diff = self._b_indicators[b_idx] - self._a_indicators[a_idx]
+        objective = cp.Minimize(cp.sum(cp.abs(edge_weights)))
+        conservation = (self._edge_incidence @ edge_weights) == diff
+        prob = cp.Problem(objective, [conservation])
+        prob.solve(solver='ECOS')  # solver recommended by Zach for big graphs
+        return np.sum(np.abs(edge_weights.value))
+
+
+class UnbalancedPair(Pair):
+    """A pair of districting plans to compare (unbalanced 1-Wasserstein)."""
     def __init__(self,
-                 partitions: List[Partition],
+                 partition_a: Partition,
+                 partition_b: Partition,
+                 slack_lambda: float,
+                 slack_norm: Union[int, float, str],
                  indicator: str = 'node',
                  pop_col: str = None):
         """
-        :param partitions: A list of :class:`gerrychain.Partition` objects
-            with the same underlying graph to comprae.
+        :param partition_a: The first GerryChain partition to compare.
+        :param partition_b: The second GerryChain partition to compare.
+        :param slack_lambda: The scale factor to use for the slack vector
+           (used for calculation of distances between unbalanced partitions).
+        :param slack_norm: The norm to use for the slack vector
+           (used for calculation of distances between unbalanced partitions).
+           Typically, this is a _p_-value for a _p_-norm, but "inf" (infinity
+           norm) and "fro" (Frobenius norm) are also acceptable.
         :param indicator: The name of the district indicator scheme to use.
             Valid indicators are "node" (equal population assumed for
             all nodes in the dual graph) and "population" (nodes are weighted
@@ -145,131 +212,89 @@ class Chain:
         :param pop_col: The name of the attribute specifying a node's
             population. Required for the "population" indicator only.
         """
-        if indicator == 'population' and not pop_col:
-            raise EmbeddingError('Cannot generate population-based indicators '
-                                 'without population data. Specify a '
-                                 'population column.')
-        if indicator not in ('population', 'node'):
-            raise EmbeddingError(f'Unknown indicator type "{indicator}"!')
+        super().__init__(partition_a=partition_a,
+                         partition_b=partition_b,
+                         indicator=indicator,
+                         pop_col=pop_col)
+        # TODO: validation of slack parameters?
+        self.slack_lambda = slack_lambda
+        self.slack_norm = slack_norm
 
-        self.partitions = partitions
-        self.indicator_type = indicator
-        self.pop_col = pop_col
+    def indicators(self, partition: Partition) -> np.ndarray:
+        """Returns scaled indicator vectors for all districts in a partition.
 
-        self.node_ordering = {
-            node: idx
-            for idx, node in enumerate(sorted(partitions[0].graph.nodes))
-        }
-        self.district_ordering = {
-            district: idx
-            for idx, district in enumerate(sorted(partitions[1].parts.keys()))
-        }
-        self._edge_incidence = None  # lazy-loaded
-        self._diag_distances = None  # lazy-loaded
+        Indicator matrices are scaled such that the rows that perfectly
+        satisfy the equal population constraint (or, alternately, an
+        equal number of nodes constraint) sum to 1.
 
-    @property
-    def diag_distances(self):
-        """Calculates the 1-Wasserstein distances between adjacent plans.
-
-        This algorithm only works for ReCom and block/chuink flip. (These are
-        our most commonly used proposals.) We have shown that, for a ReCom-like
-        proposal where only two districts are changed at a time, there exists
-        an optimal matching between plans such that the labeling of unmodified
-        districts is untouched.
+        :param partition: The partition to generate indicator vectors for.
         """
-        if self._diag_distances is not None:
-            return self._diag_distances
+        indicator = None
+        target = None
+        if self.indicator_type == 'node':
+            target = len(partition.graph.nodes) / len(partition)
+            indicator = node_indicator(partition,
+                                       self.district_ordering,
+                                       self.node_ordering)
+        elif self.indicator_type == 'population':
+            total_pop = sum(partition.graph.nodes[node][self.pop_col]
+                            for node in partition.graph.nodes)
+            target = total_pop / len(partition)
+            indicator = population_indicator(partition,
+                                             self.district_ordering,
+                                             self.node_ordering,
+                                             self.pop_col)
+        return indicator / target
+
+    def _district_distance(self, a_label, b_label) -> Tuple[np.float64,
+                                                            np.ndarray,
+                                                            np.ndarray]:
+        """Calculates the unbalanced 1-Wasserstein distance between districts.
+
+        Districts are compared across plans only, as districts within
+        a plan are disjoint by definition.
+
+        :param a_label: The label of the district to compare in the
+            first district (``partition_a``).
+        :param b_label: The label of the district to compare in the
+            second district (``partition_b``).
+        :returns: A 3-tuple with the distance as the first element,
+            the
+        """
+        a_idx = self.district_ordering[a_label]
+        b_idx = self.district_ordering[b_label]
+        if self._pairwise_distances:
+            # Avoid recomputation if district distances have already been
+            # computed in the course of computing the plan distance.
+            return self._pairwise_distances[a_idx][b_idx]
         if self._edge_incidence is None:
-            self._edge_incidence = incidence_matrix(self.partitions[0].graph,
+            self._edge_incidence = incidence_matrix(self.partition_a.graph,
                                                     oriented=True)
+        n_nodes = self._edge_incidence.shape[0]
+        n_edges = self._edge_incidence.shape[1]
+        edge_flow = cp.Variable(n_edges)
+        slack = cp.Variable(n_nodes)
+        diff = self._b_indicators[b_idx] - self._a_indicators[a_idx]
 
-        diag_distances = np.zeros(len(self.partitions) - 1)
-        left_indicator = None
-        right_indicator = indicators(self.partitions[0], self.indicator_type,
-                                     self.pop_col, self.node_ordering,
-                                     self.district_ordering)
+        # Minimize the sum of:
+        #   * The L1 norm of the edge flow vector (that is, the total flow
+        #     through the entire graph)
+        #   * The specified norm of the slack vector, scaled by some
+        #     (positive) scale factor λ.
+        # ...subject to node-level conservation of mass (slack included).
+        total_flow = cp.norm(edge_flow, 1)
+        scaled_slack = self.slack_lambda * cp.norm(slack, self.slack_norm)
+        objective = cp.Minimize(total_flow + scaled_slack)
+        conservation = (self._edge_incidence @ edge_flow) == (diff + slack)
+        prob = cp.Problem(objective, [conservation])
+        prob.solve()
 
-        for part_idx in range(len(self.partitions) - 1):
-            # Indices returned by np.where() correspond directly to the
-            # indices of the indicator vectors; note that they do *not*
-            # necessarily relate to district labels.
-            left_indicator = right_indicator
-            right_indicator = indicators(self.partitions[part_idx + 1],
-                                         self.indicator_type, self.pop_col,
-                                         self.node_ordering,
-                                         self.district_ordering)
-            diff = left_indicator != right_indicator
-            districts_changed = np.where(diff.any(axis=1))[0].tolist()
-            distances = np.zeros((2, 2))
-            for outer_idx, outer_district in enumerate(districts_changed):
-                for inner_idx, inner_district in enumerate(districts_changed):
-                    dist = district_distance(left_indicator[outer_district],
-                                             right_indicator[inner_district],
-                                             self._edge_incidence)
-                    distances[outer_idx][inner_idx] = dist
-            matched_distance = distances[0][0] + distances[1][1]
-            swapped_distance = distances[0][1] + distances[1][0]
-            diag_distances[part_idx] = min(matched_distance, swapped_distance)
-        self._diag_distances = diag_distances
-        return diag_distances
-
-
-def district_distance(a_indicator: np.ndarray, b_indicator: np.ndarray,
-                      edge_incidence: np.ndarray) -> np.float64:
-    """Calculates the 1-Wasserstein distance between two districts.
-
-    :param a_indicator: The indicator vector of one district.
-    :param b_indicator: The indicator vector of the other district.
-    :param edge_incidence: The edge incidence matrix for the districts'
-        underlying graph.
-    """
-    n_edges = edge_incidence.shape[1]
-    edge_weights = cp.Variable(n_edges)
-    diff = b_indicator - a_indicator
-    objective = cp.Minimize(cp.sum(cp.abs(edge_weights)))
-    conservation = (edge_incidence @ edge_weights) == diff
-    prob = cp.Problem(objective, [conservation])
-    prob.solve(solver='ECOS')  # solver recommended by Zach for big graphs
-    return np.sum(np.abs(edge_weights.value))
-
-
-def indicators(partition: Partition, indicator_type: str, pop_col: str,
-               node_ordering: Dict, district_ordering: Dict) -> np.ndarray:
-    """Generates indicator vectors for all districts in a partition."
-
-    :param partition: The partition to generate indicator vectors for.
-    :param indicator_type: The type of indicator to use.
-    :param pop_col: The node attribute with population counts.
-    :param node_ordering: A dictionary mapping NetworkX node labels to
-        indicator matrix column indices.
-    :param district_ordering: A dictionary mapping district labels to
-        indicator matrix row indices.
-    :returns: A matrix of indicator vectors (# of districts X # of nodes).
-    """
-    n_districts = len(partition)
-    n_nodes = len(partition.graph.nodes)
-    indicator = np.zeros((n_districts, n_nodes))
-    if indicator_type == 'node':
-        for district_label, district_idx in district_ordering.items():
-            nodes_in_district = [
-                node_ordering[node] for node in partition.parts[district_label]
-            ]
-            indicator[district_idx][nodes_in_district] = 1
-    elif indicator_type == 'population':
-        for district_label, district_idx in district_ordering.items():
-            for node_label in partition.parts[district_label]:
-                node = partition.graph.nodes[node_label]
-                try:
-                    node_pop = node[pop_col]
-                except KeyError:
-                    raise EmbeddingError('Cannot create population '
-                                         f'indicator. Node {node_label} '
-                                         f'has no "{pop_col}" attribute.')
-                node_idx = node_ordering[node_label]
-                indicator[district_idx][node_idx] = node_pop
-
-    # Norm so that rows sum to 1.
-    return indicator / np.sum(indicator, axis=1).reshape(-1, 1)
+        solved_total_flow = LA.norm(edge_flow.value, 1)
+        solved_scaled_slack = self.slack_lambda * LA.norm(slack.value,
+                                                          self.slack_norm)
+        return (solved_total_flow + solved_scaled_slack,
+                slack.value,
+                edge_flow.value)
 
 
 class EmbeddingError(Exception):
@@ -278,3 +303,62 @@ class EmbeddingError(Exception):
 
 class IsomorphismError(Exception):
     """Raised if the graphs of a pair of partitions are not isomorphic."""
+
+
+def population_indicator(partition: Partition,
+                         district_ordering: Dict[Hashable, int],
+                         node_ordering: Dict[Hashable, int],
+                         pop_col: str) -> np.ndarray:
+    """Returns an indicator matrix with each node weighted by its population.
+
+    :param partition: The :class:`gerrychain.Partition` to generate an
+        indicator matrix from.
+    :param district_ordering: A mapping between the district labeling of the
+        partition and the row indices of the indicator matrix.
+    :param node_ordering: A mapping between the labeling of the nodes in the
+        partition's underlying graph and the column indices of the indicator
+        matrix.
+    :param pop_col: The name of the population column/attribute used to
+        determine population weighting. Each node of the partition's graph
+        is expected to have this attribute.
+    """
+    n_districts = len(partition)
+    n_nodes = len(partition.graph.nodes)
+    indicator = np.zeros((n_districts, n_nodes))
+    for district_label, district_idx in district_ordering.items():
+        for node_label in partition.parts[district_label]:
+            node = partition.graph.nodes[node_label]
+            try:
+                node_pop = node[pop_col]
+            except KeyError:
+                raise EmbeddingError('Cannot create population '
+                                     f'indicator. Node {node_label} '
+                                     f'has no "{pop_col}" attribute.')
+            node_idx = node_ordering[node_label]
+            indicator[district_idx][node_idx] = node_pop
+    return indicator
+
+
+def node_indicator(partition: Partition,
+                   district_ordering: Dict[Hashable, int],
+                   node_ordering: Dict[Hashable, int]) -> np.ndarray:
+    """Returns an indicator matrix with a weighting of 1 for each node.
+
+    :param partition: The :class:`gerrychain.Partition` to generate an
+        indicator matrix from.
+    :param district_ordering: A mapping between the district labeling of the
+        partition and the row indices of the indicator matrix.
+    :param node_ordering: A mapping between the labeling of the nodes in the
+        partition's underlying graph and the column indices of the indicator
+        matrix.
+    """
+    n_districts = len(partition)
+    n_nodes = len(partition.graph.nodes)
+    indicator = np.zeros((n_districts, n_nodes))
+    for district_label, district_idx in district_ordering.items():
+        nodes_in_district = [
+            node_ordering[node]
+            for node in partition.parts[district_label]
+        ]
+        indicator[district_idx][nodes_in_district] = 1
+    return indicator
