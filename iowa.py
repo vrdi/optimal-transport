@@ -129,7 +129,7 @@ def MC_sample(jgraph, settings, save_part = True):
         total_steps=num_steps
     )
 
-    partitions=[initial_partition] # recording partitions at each step
+    partitions=[] # recording partitions at each step
     for index, part in enumerate(chain):
         if index % interval == 0:
             print('Markov chain step '+str(index))
