@@ -65,7 +65,7 @@ def getbeta(t):
 
 fips="05"
 graph = Graph.from_json("./BG05/BG05.json")
-totpop = sum([int(graph.node[n]["TOTPOP"]) for n in graph.nodes])
+totpop = sum([int(graph.nodes[n]["TOTPOP"]) for n in graph.nodes])
 
 for n in graph.nodes:
     graph.nodes[n]["TOTPOP"] = int(graph.nodes[n]["TOTPOP"])
